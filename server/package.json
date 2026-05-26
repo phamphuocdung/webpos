@@ -1,0 +1,13 @@
+{
+  "name": "danny-crm-pos-secure-api",
+  "version": "1.0.0",
+  "private": true,
+  "type": "commonjs",
+  "scripts": {
+    "start": "node server.js",
+    "keygen": "node -e \"console.log(require('crypto').randomBytes(32).toString('base64'))\""
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

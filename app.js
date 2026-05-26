@@ -1,4 +1,6 @@
 const STORAGE_KEY = "danny-crm-pos-state-v1";
+const SESSION_KEY = "danny-crm-session";
+const API_URL = (window.APP_CONFIG?.API_URL || "").replace(/\/$/, "");
 
 const demoState = {
   users: [
@@ -52,7 +54,7 @@ const demoState = {
 };
 
 let state = loadState();
-let session = JSON.parse(localStorage.getItem("danny-crm-session") || "null");
+let session = JSON.parse(localStorage.getItem(SESSION_KEY) || "null");
 let activeView = "dashboard";
 let cart = [];
 let productQuery = "";
@@ -73,12 +75,47 @@ function loadState() {
 
 function saveState() {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+  if (!API_URL || !session?.token) return;
+
+  apiRequest("/api/state", {
+    method: "PUT",
+    body: JSON.stringify(state),
+  }).catch((error) => {
+    console.error("Remote save failed", error);
+    alert("Khong dong bo duoc DB online. Du lieu hien van duoc luu tam tren trinh duyet.");
+  });
 }
 
-function setSession(user) {
-  session = user ? { id: user.id, name: user.name, role: user.role } : null;
-  localStorage.setItem("danny-crm-session", JSON.stringify(session));
+function setSession(user, token = session?.token) {
+  session = user ? { id: user.id, name: user.name, role: user.role, token } : null;
+  localStorage.setItem(SESSION_KEY, JSON.stringify(session));
   render();
+}
+
+async function apiRequest(path, options = {}) {
+  const headers = {
+    "Content-Type": "application/json",
+    ...(options.headers || {}),
+  };
+
+  if (options.auth !== false && session?.token) {
+    headers.Authorization = `Bearer ${session.token}`;
+  }
+
+  const response = await fetch(`${API_URL}${path}`, {
+    ...options,
+    headers,
+  });
+
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(data.error || "API_ERROR");
+  return data;
+}
+
+async function loadRemoteState() {
+  if (!API_URL || !session?.token) return;
+  state = await apiRequest("/api/state");
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
 }
 
 function isAdmin() {
@@ -172,7 +209,7 @@ function renderLogin() {
       <section class="login-panel">
         <form class="login-card" data-form="login">
           <h2>Dang nhap</h2>
-          <p>Chon tai khoan demo de vao he thong.</p>
+          <p>${API_URL ? "Dang nhap qua DB online da ma hoa." : "Chon tai khoan demo de vao he thong."}</p>
           <div class="field">
             <label for="username">Tai khoan</label>
             <input id="username" name="username" autocomplete="username" value="admin" required />
@@ -660,9 +697,28 @@ function bindEvents() {
     });
   });
 
-  document.querySelector('[data-form="login"]')?.addEventListener("submit", (event) => {
+  document.querySelector('[data-form="login"]')?.addEventListener("submit", async (event) => {
     event.preventDefault();
     const data = Object.fromEntries(new FormData(event.currentTarget));
+
+    if (API_URL) {
+      try {
+        const result = await apiRequest("/api/login", {
+          method: "POST",
+          body: JSON.stringify(data),
+          auth: false,
+        });
+        session = { ...result.user, token: result.token };
+        localStorage.setItem(SESSION_KEY, JSON.stringify(session));
+        await loadRemoteState();
+        activeView = "dashboard";
+        render();
+      } catch {
+        alert("Sai tai khoan, mat khau, hoac backend khong truy cap duoc.");
+      }
+      return;
+    }
+
     const user = state.users.find((item) => item.username === data.username && item.password === data.password);
     if (!user) {
       alert("Sai tai khoan hoac mat khau.");
@@ -826,4 +882,16 @@ function saveUser(event) {
   render();
 }
 
-render();
+async function boot() {
+  render();
+  if (!API_URL || !session?.token) return;
+
+  try {
+    await loadRemoteState();
+    render();
+  } catch {
+    setSession(null);
+  }
+}
+
+boot();

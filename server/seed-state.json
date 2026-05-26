@@ -1,0 +1,20 @@
+{
+  "users": [
+    { "id": "u1", "name": "Danny Admin", "username": "admin", "password": "admin123", "role": "ADMIN" },
+    { "id": "u2", "name": "Nhan vien POS", "username": "staff", "password": "staff123", "role": "STAFF" }
+  ],
+  "products": [
+    { "id": "p1", "sku": "CF-001", "name": "Ca phe sua", "category": "Do uong", "price": 28000, "cost": 14000, "stock": 42, "minStock": 12 },
+    { "id": "p2", "sku": "TE-002", "name": "Tra dao", "category": "Do uong", "price": 32000, "cost": 15000, "stock": 25, "minStock": 10 },
+    { "id": "p3", "sku": "BK-101", "name": "Banh mi bo", "category": "Do an", "price": 38000, "cost": 21000, "stock": 18, "minStock": 8 },
+    { "id": "p4", "sku": "SN-040", "name": "Snack rong bien", "category": "An vat", "price": 18000, "cost": 9000, "stock": 7, "minStock": 10 },
+    { "id": "p5", "sku": "MT-016", "name": "Matcha latte", "category": "Do uong", "price": 45000, "cost": 22000, "stock": 16, "minStock": 6 },
+    { "id": "p6", "sku": "CK-022", "name": "Cookie hat dieu", "category": "An vat", "price": 22000, "cost": 10000, "stock": 31, "minStock": 10 }
+  ],
+  "customers": [
+    { "id": "c1", "name": "Khach le", "phone": "", "email": "", "note": "Default walk-in customer", "spent": 0 },
+    { "id": "c2", "name": "Minh Anh", "phone": "0901234567", "email": "minh@example.com", "note": "Thich tra dao", "spent": 128000 },
+    { "id": "c3", "name": "Hoang Nam", "phone": "0918882222", "email": "nam@example.com", "note": "Mua buoi sang", "spent": 236000 }
+  ],
+  "sales": []
+}
