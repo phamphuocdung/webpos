@@ -1,3 +1,3 @@
 window.APP_CONFIG = {
-  API_URL: "",
+  API_URL: "https://webpos-m4qf.onrender.com",
 };
