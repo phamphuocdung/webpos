@@ -22,6 +22,12 @@ copy .env.example .env
 npm start
 ```
 
+To clear all products, customers, sales, and staff users while keeping only the default admin account:
+
+```powershell
+npm run reset-db
+```
+
 Then edit `../config.js`:
 
 ```js

@@ -78,6 +78,13 @@ button {
   letter-spacing: 0;
 }
 
+.brand-logo {
+  width: 40px;
+  height: 40px;
+  flex: 0 0 auto;
+  border-radius: 8px;
+}
+
 .brand-icon {
   width: 40px;
   height: 40px;
@@ -202,7 +209,7 @@ button {
   width: 100%;
 }
 
-.demo-users {
+.login-hints {
   display: grid;
   gap: 8px;
   margin-top: 18px;

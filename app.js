@@ -1,56 +1,14 @@
-const STORAGE_KEY = "danny-crm-pos-state-v1";
+const STORAGE_KEY = "danny-crm-pos-state-v2";
 const SESSION_KEY = "danny-crm-session";
 const API_URL = (window.APP_CONFIG?.API_URL || "").replace(/\/$/, "");
 
-const demoState = {
+const initialState = {
   users: [
     { id: "u1", name: "Danny Admin", username: "admin", password: "admin123", role: "ADMIN" },
-    { id: "u2", name: "Nhan vien POS", username: "staff", password: "staff123", role: "STAFF" },
   ],
-  products: [
-    { id: "p1", sku: "CF-001", name: "Ca phe sua", category: "Do uong", price: 28000, cost: 14000, stock: 42, minStock: 12 },
-    { id: "p2", sku: "TE-002", name: "Tra dao", category: "Do uong", price: 32000, cost: 15000, stock: 25, minStock: 10 },
-    { id: "p3", sku: "BK-101", name: "Banh mi bo", category: "Do an", price: 38000, cost: 21000, stock: 18, minStock: 8 },
-    { id: "p4", sku: "SN-040", name: "Snack rong bien", category: "An vat", price: 18000, cost: 9000, stock: 7, minStock: 10 },
-    { id: "p5", sku: "MT-016", name: "Matcha latte", category: "Do uong", price: 45000, cost: 22000, stock: 16, minStock: 6 },
-    { id: "p6", sku: "CK-022", name: "Cookie hat dieu", category: "An vat", price: 22000, cost: 10000, stock: 31, minStock: 10 },
-  ],
-  customers: [
-    { id: "c1", name: "Khach le", phone: "", email: "", note: "Default walk-in customer", spent: 0 },
-    { id: "c2", name: "Minh Anh", phone: "0901234567", email: "minh@example.com", note: "Thich tra dao", spent: 128000 },
-    { id: "c3", name: "Hoang Nam", phone: "0918882222", email: "nam@example.com", note: "Mua buoi sang", spent: 236000 },
-  ],
-  sales: [
-    {
-      id: "s1",
-      code: "HD-1001",
-      createdAt: new Date(Date.now() - 1000 * 60 * 60 * 8).toISOString(),
-      userName: "Danny Admin",
-      customerId: "c2",
-      subtotal: 88000,
-      discount: 0,
-      total: 88000,
-      items: [
-        { productId: "p1", name: "Ca phe sua", qty: 2, price: 28000, cost: 14000 },
-        { productId: "p6", name: "Cookie hat dieu", qty: 1, price: 22000, cost: 10000 },
-      ],
-    },
-    {
-      id: "s2",
-      code: "HD-1002",
-      createdAt: new Date(Date.now() - 1000 * 60 * 60 * 2).toISOString(),
-      userName: "Nhan vien POS",
-      customerId: "c3",
-      subtotal: 115000,
-      discount: 5000,
-      total: 110000,
-      items: [
-        { productId: "p5", name: "Matcha latte", qty: 1, price: 45000, cost: 22000 },
-        { productId: "p3", name: "Banh mi bo", qty: 1, price: 38000, cost: 21000 },
-        { productId: "p2", name: "Tra dao", qty: 1, price: 32000, cost: 15000 },
-      ],
-    },
-  ],
+  products: [],
+  customers: [],
+  sales: [],
 };
 
 let state = loadState();
@@ -59,17 +17,18 @@ let activeView = "dashboard";
 let cart = [];
 let productQuery = "";
 let modal = null;
+let remoteSaveQueue = Promise.resolve();
 
 const app = document.querySelector("#app");
-const money = new Intl.NumberFormat("vi-VN", { style: "currency", currency: "VND" });
+const money = new Intl.NumberFormat("en-US", { style: "currency", currency: "VND" });
 
 function loadState() {
   const stored = localStorage.getItem(STORAGE_KEY);
-  if (!stored) return structuredClone(demoState);
+  if (!stored) return structuredClone(initialState);
   try {
     return JSON.parse(stored);
   } catch {
-    return structuredClone(demoState);
+    return structuredClone(initialState);
   }
 }
 
@@ -77,13 +36,19 @@ function saveState() {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
   if (!API_URL || !session?.token) return;
 
-  apiRequest("/api/state", {
-    method: "PUT",
-    body: JSON.stringify(state),
-  }).catch((error) => {
-    console.error("Remote save failed", error);
-    alert("Khong dong bo duoc DB online. Du lieu hien van duoc luu tam tren trinh duyet.");
-  });
+  const snapshot = structuredClone(state);
+  remoteSaveQueue = remoteSaveQueue
+    .catch(() => {})
+    .then(() =>
+      apiRequest("/api/state", {
+        method: "PUT",
+        body: JSON.stringify(snapshot),
+      })
+    )
+    .catch((error) => {
+      console.error("Remote save failed", error);
+      alert("Online database sync failed. The change is still stored temporarily in this browser.");
+    });
 }
 
 function setSession(user, token = session?.token) {
@@ -127,7 +92,7 @@ function uid(prefix) {
 }
 
 function fmtDate(value) {
-  return new Intl.DateTimeFormat("vi-VN", {
+  return new Intl.DateTimeFormat("en-US", {
     dateStyle: "short",
     timeStyle: "short",
   }).format(new Date(value));
@@ -145,9 +110,9 @@ function getStats() {
 }
 
 function productStatus(product) {
-  if (product.stock <= 0) return ["danger", "Het hang"];
-  if (product.stock <= product.minStock) return ["warn", "Sap het"];
-  return ["ok", "Con hang"];
+  if (product.stock <= 0) return ["danger", "Out of stock"];
+  if (product.stock <= product.minStock) return ["warn", "Low stock"];
+  return ["ok", "In stock"];
 }
 
 function render() {
@@ -157,18 +122,18 @@ function render() {
   }
 
   const navItems = [
-    ["dashboard", "▦", "Thong ke"],
-    ["pos", "+", "Ban hang"],
-    ["inventory", "□", "Ton kho"],
-    ["customers", "◎", "Khach hang"],
-    ["reports", "≡", "Bao cao"],
-    ...(isAdmin() ? [["users", "♙", "Nhan su"]] : []),
+    ["dashboard", "D", "Dashboard"],
+    ["pos", "$", "POS"],
+    ["inventory", "I", "Inventory"],
+    ["customers", "C", "Customers"],
+    ["reports", "R", "Reports"],
+    ...(isAdmin() ? [["users", "U", "Users"]] : []),
   ];
 
   app.innerHTML = `
     <div class="app-shell">
       <aside class="sidebar">
-        <div class="brand-mark"><span class="brand-icon">D</span><span>Danny CRM POS</span></div>
+        ${brandLogo()}
         <nav class="nav">
           ${navItems
             .map(
@@ -185,7 +150,7 @@ function render() {
             <strong>${session.name}</strong>
             <span>${session.role}</span>
           </div>
-          <button class="btn secondary" data-action="logout">Dang xuat</button>
+          <button class="btn secondary" data-action="logout">Log out</button>
         </div>
       </aside>
       <main class="main">${renderView()}</main>
@@ -200,28 +165,28 @@ function renderLogin() {
   app.innerHTML = `
     <div class="login-shell">
       <section class="login-visual">
-        <div class="brand-mark"><span class="brand-icon">D</span><span>Danny CRM POS</span></div>
+        ${brandLogo()}
         <div class="login-copy">
-          <h1>Quan ly ban hang va ton kho</h1>
-          <p>Mot web app cho POS, CRM, phan quyen nhan vien, thong ke doanh thu va kiem soat ton kho theo thoi gian thuc tren trinh duyet.</p>
+          <h1>Sales, CRM, and inventory control</h1>
+          <p>A secure POS and CRM workspace for sales, customer records, role-based access, reporting, and encrypted online inventory data.</p>
         </div>
       </section>
       <section class="login-panel">
         <form class="login-card" data-form="login">
-          <h2>Dang nhap</h2>
-          <p>${API_URL ? "Dang nhap qua DB online da ma hoa." : "Chon tai khoan demo de vao he thong."}</p>
+          <h2>Sign in</h2>
+          <p>${API_URL ? "Sign in with the encrypted online database." : "Local mode is active until a backend URL is configured."}</p>
           <div class="field">
-            <label for="username">Tai khoan</label>
+            <label for="username">Username</label>
             <input id="username" name="username" autocomplete="username" value="admin" required />
           </div>
           <div class="field">
-            <label for="password">Mat khau</label>
+            <label for="password">Password</label>
             <input id="password" name="password" type="password" autocomplete="current-password" value="admin123" required />
           </div>
-          <button class="btn full" type="submit">Dang nhap</button>
-          <div class="demo-users">
+          <button class="btn full" type="submit">Sign in</button>
+          <div class="login-hints">
             <span><strong>ADMIN</strong>: admin / admin123</span>
-            <span><strong>STAFF</strong>: staff / staff123</span>
+            <span>Create staff users from the Users page.</span>
           </div>
         </form>
       </section>
@@ -243,16 +208,16 @@ function renderDashboard() {
   const stats = getStats();
   const lowProducts = state.products.filter((product) => product.stock <= product.minStock);
   return `
-    ${topbar("Thong ke", "Tong quan doanh thu, loi nhuan, don hang va canh bao ton kho.")}
+    ${topbar("Dashboard", "Overview of revenue, estimated profit, orders, and inventory alerts.")}
     ${statGrid(stats)}
     <div class="grid-2">
       <section class="panel">
-        <div class="panel-head"><h2>Don hang gan day</h2><button class="btn secondary" data-view="reports">Xem bao cao</button></div>
+        <div class="panel-head"><h2>Recent Orders</h2><button class="btn secondary" data-view="reports">View Reports</button></div>
         <div class="table-wrap">
           <table>
-            <thead><tr><th>Ma</th><th>Thoi gian</th><th>Nhan vien</th><th>Tong tien</th></tr></thead>
+            <thead><tr><th>Code</th><th>Time</th><th>Staff</th><th>Total</th></tr></thead>
             <tbody>
-              ${state.sales
+              ${state.sales.length ? state.sales
                 .slice()
                 .reverse()
                 .slice(0, 6)
@@ -266,13 +231,13 @@ function renderDashboard() {
                     </tr>
                   `
                 )
-                .join("")}
+                .join("") : `<tr><td colspan="4" class="empty">No orders yet.</td></tr>`}
             </tbody>
           </table>
         </div>
       </section>
       <section class="panel">
-        <div class="panel-head"><h2>Canh bao ton kho</h2><button class="btn secondary" data-view="inventory">Xu ly</button></div>
+        <div class="panel-head"><h2>Inventory Alerts</h2><button class="btn secondary" data-view="inventory">Review</button></div>
         <div class="panel-body">
           ${
             lowProducts.length
@@ -282,7 +247,7 @@ function renderDashboard() {
                     return `<div class="cart-item"><div><strong>${product.name}</strong><br><span class="badge ${type}">${label}</span></div><strong>${product.stock}/${product.minStock}</strong></div>`;
                   })
                   .join("")
-              : `<div class="empty">Khong co san pham sap het hang.</div>`
+              : `<div class="empty">No low-stock products.</div>`
           }
         </div>
       </section>
@@ -293,10 +258,10 @@ function renderDashboard() {
 function statGrid(stats) {
   return `
     <div class="stat-grid">
-      <div class="stat"><span>Doanh thu</span><strong>${money.format(stats.revenue)}</strong></div>
-      <div class="stat"><span>Loi nhuan uoc tinh</span><strong>${money.format(stats.profit)}</strong></div>
-      <div class="stat"><span>Gia tri ton kho</span><strong>${money.format(stats.inventoryValue)}</strong></div>
-      <div class="stat"><span>Don hang / Canh bao</span><strong>${stats.orders} / ${stats.lowStock}</strong></div>
+      <div class="stat"><span>Revenue</span><strong>${money.format(stats.revenue)}</strong></div>
+      <div class="stat"><span>Estimated Profit</span><strong>${money.format(stats.profit)}</strong></div>
+      <div class="stat"><span>Inventory Value</span><strong>${money.format(stats.inventoryValue)}</strong></div>
+      <div class="stat"><span>Orders / Alerts</span><strong>${stats.orders} / ${stats.lowStock}</strong></div>
     </div>
   `;
 }
@@ -308,37 +273,38 @@ function renderPos() {
   });
   const subtotal = cart.reduce((sum, item) => sum + item.price * item.qty, 0);
   return `
-    ${topbar("Ban hang POS", "Tao don hang, tru ton kho tu dong va luu lich su ban hang.", `<button class="btn secondary" data-action="clear-cart">Xoa gio</button>`)}
+    ${topbar("POS Sales", "Create sales, reduce stock automatically, and save order history.", `<button class="btn secondary" data-action="clear-cart">Clear Cart</button>`)}
     <div class="grid-2">
       <section class="panel">
         <div class="panel-head">
-          <h2>San pham</h2>
-          <input class="field-input searchbar" data-input="product-search" placeholder="Tim ten, SKU, danh muc..." value="${productQuery}" />
+          <h2>Products</h2>
+          <input class="field-input searchbar" data-input="product-search" placeholder="Search name, SKU, category..." value="${productQuery}" />
         </div>
         <div class="panel-body">
           <div class="product-grid">
-            ${filtered
+            ${filtered.length ? filtered
               .map((product) => {
                 const [type, label] = productStatus(product);
                 return `
                   <button class="product-card" data-action="add-cart" data-id="${product.id}" ${product.stock <= 0 ? "disabled" : ""}>
                     <h3>${product.name}</h3>
-                    <p>${product.sku} · ${product.category}</p>
+                    <p>${product.sku} - ${product.category}</p>
                     <strong>${money.format(product.price)}</strong>
                     <span class="badge ${type}">${label}: ${product.stock}</span>
                   </button>
                 `;
               })
-              .join("")}
+              .join("") : `<div class="empty">No products yet. Add products in Inventory.</div>`}
           </div>
         </div>
       </section>
       <section class="panel">
-        <div class="panel-head"><h2>Gio hang</h2><span class="badge">${cart.length} dong</span></div>
+        <div class="panel-head"><h2>Cart</h2><span class="badge">${cart.length} lines</span></div>
         <div class="panel-body">
           <div class="field">
-            <label>Khach hang</label>
+            <label>Customer</label>
             <select data-input="cart-customer">
+              <option value="">Walk-in customer</option>
               ${state.customers.map((customer) => `<option value="${customer.id}">${customer.name}</option>`).join("")}
             </select>
           </div>
@@ -354,25 +320,25 @@ function renderPos() {
                             <span>${money.format(item.price)} x ${item.qty}</span>
                           </div>
                           <div class="qty-controls">
-                            <button class="icon-btn" data-action="dec-cart" data-id="${item.productId}" title="Giam">-</button>
+                            <button class="icon-btn" data-action="dec-cart" data-id="${item.productId}" title="Decrease">-</button>
                             <strong>${item.qty}</strong>
-                            <button class="icon-btn" data-action="inc-cart" data-id="${item.productId}" title="Tang">+</button>
+                            <button class="icon-btn" data-action="inc-cart" data-id="${item.productId}" title="Increase">+</button>
                           </div>
                         </div>
                       `
                     )
                     .join("")
-                : `<div class="empty">Chua co san pham trong gio.</div>`
+                : `<div class="empty">No items in cart.</div>`
             }
           </div>
           <div class="totals">
             <div class="field">
-              <label>Giam gia</label>
+              <label>Discount</label>
               <input data-input="discount" type="number" min="0" value="0" />
             </div>
-            <div class="total-row"><span>Tam tinh</span><strong>${money.format(subtotal)}</strong></div>
-            <div class="total-row grand"><span>Thanh toan</span><strong data-total="${subtotal}">${money.format(subtotal)}</strong></div>
-            <button class="btn full" data-action="checkout" ${cart.length ? "" : "disabled"}>Thanh toan</button>
+            <div class="total-row"><span>Subtotal</span><strong>${money.format(subtotal)}</strong></div>
+            <div class="total-row grand"><span>Payment Due</span><strong data-total="${subtotal}">${money.format(subtotal)}</strong></div>
+            <button class="btn full" data-action="checkout" ${cart.length ? "" : "disabled"}>Checkout</button>
           </div>
         </div>
       </section>
@@ -383,16 +349,16 @@ function renderPos() {
 function renderInventory() {
   return `
     ${topbar(
-      "Kiem soat ton kho",
-      "Quan ly san pham, gia ban, gia von, muc canh bao va so luong ton.",
-      isAdmin() ? `<button class="btn" data-action="open-product">Them san pham</button>` : ""
+      "Inventory Control",
+      "Manage products, prices, cost, alert levels, and stock quantity.",
+      isAdmin() ? `<button class="btn" data-action="open-product">Add Product</button>` : ""
     )}
     <section class="panel">
       <div class="table-wrap">
         <table>
-          <thead><tr><th>SKU</th><th>San pham</th><th>Danh muc</th><th>Gia ban</th><th>Ton</th><th>Canh bao</th><th>Trang thai</th><th></th></tr></thead>
+          <thead><tr><th>SKU</th><th>Product</th><th>Category</th><th>Price</th><th>Stock</th><th>Alert</th><th>Status</th><th></th></tr></thead>
           <tbody>
-            ${state.products
+            ${state.products.length ? state.products
               .map((product) => {
                 const [type, label] = productStatus(product);
                 return `
@@ -405,13 +371,13 @@ function renderInventory() {
                     <td>${product.minStock}</td>
                     <td><span class="badge ${type}">${label}</span></td>
                     <td class="toolbar">
-                      <button class="btn secondary" data-action="adjust-stock" data-id="${product.id}">Nhap/Xuat</button>
-                      ${isAdmin() ? `<button class="btn secondary" data-action="edit-product" data-id="${product.id}">Sua</button>` : ""}
+                      <button class="btn secondary" data-action="adjust-stock" data-id="${product.id}">Adjust</button>
+                      ${isAdmin() ? `<button class="btn secondary" data-action="edit-product" data-id="${product.id}">Edit</button>` : ""}
                     </td>
                   </tr>
                 `;
               })
-              .join("")}
+              .join("") : `<tr><td colspan="8" class="empty">No products yet.</td></tr>`}
           </tbody>
         </table>
       </div>
@@ -421,13 +387,13 @@ function renderInventory() {
 
 function renderCustomers() {
   return `
-    ${topbar("CRM khach hang", "Luu thong tin khach hang, ghi chu va tong chi tieu.", `<button class="btn" data-action="open-customer">Them khach hang</button>`)}
+    ${topbar("Customers", "Store customer contact details, notes, and lifetime spend.", `<button class="btn" data-action="open-customer">Add Customer</button>`)}
     <section class="panel">
       <div class="table-wrap">
         <table>
-          <thead><tr><th>Ten</th><th>Dien thoai</th><th>Email</th><th>Da mua</th><th>Ghi chu</th><th></th></tr></thead>
+          <thead><tr><th>Name</th><th>Phone</th><th>Email</th><th>Spent</th><th>Note</th><th></th></tr></thead>
           <tbody>
-            ${state.customers
+            ${state.customers.length ? state.customers
               .map(
                 (customer) => `
                   <tr>
@@ -436,11 +402,11 @@ function renderCustomers() {
                     <td>${customer.email || "-"}</td>
                     <td>${money.format(customer.spent || 0)}</td>
                     <td>${customer.note || "-"}</td>
-                    <td><button class="btn secondary" data-action="edit-customer" data-id="${customer.id}">Sua</button></td>
+                    <td><button class="btn secondary" data-action="edit-customer" data-id="${customer.id}">Edit</button></td>
                   </tr>
                 `
               )
-              .join("")}
+              .join("") : `<tr><td colspan="6" class="empty">No customers yet.</td></tr>`}
           </tbody>
         </table>
       </div>
@@ -458,11 +424,11 @@ function renderReports() {
   const rows = Object.entries(byProduct).sort((a, b) => b[1] - a[1]);
   const max = Math.max(...rows.map((row) => row[1]), 1);
   return `
-    ${topbar("Bao cao", "Theo doi doanh thu theo san pham va lich su don hang.")}
+    ${topbar("Reports", "Track revenue by product and review order history.")}
     ${statGrid(getStats())}
     <div class="grid-2">
       <section class="panel">
-        <div class="panel-head"><h2>Doanh thu theo san pham</h2></div>
+        <div class="panel-head"><h2>Revenue by Product</h2></div>
         <div class="panel-body chart">
           ${
             rows.length
@@ -477,21 +443,21 @@ function renderReports() {
                     `
                   )
                   .join("")
-              : `<div class="empty">Chua co du lieu ban hang.</div>`
+              : `<div class="empty">No sales data yet.</div>`
           }
         </div>
       </section>
       <section class="panel">
-        <div class="panel-head"><h2>Lich su don hang</h2></div>
+        <div class="panel-head"><h2>Order History</h2></div>
         <div class="table-wrap">
           <table>
-            <thead><tr><th>Ma</th><th>Thoi gian</th><th>Tong</th></tr></thead>
+            <thead><tr><th>Code</th><th>Time</th><th>Total</th></tr></thead>
             <tbody>
-              ${state.sales
+              ${state.sales.length ? state.sales
                 .slice()
                 .reverse()
                 .map((sale) => `<tr><td>${sale.code}</td><td>${fmtDate(sale.createdAt)}</td><td>${money.format(sale.total)}</td></tr>`)
-                .join("")}
+                .join("") : `<tr><td colspan="3" class="empty">No orders yet.</td></tr>`}
             </tbody>
           </table>
         </div>
@@ -503,11 +469,11 @@ function renderReports() {
 function renderUsers() {
   if (!isAdmin()) return renderDashboard();
   return `
-    ${topbar("Nhan su va phan quyen", "ADMIN co toan quyen; STAFF ban hang, xem khach hang va cap nhat ton kho.", `<button class="btn" data-action="open-user">Them nhan su</button>`)}
+    ${topbar("Users and Roles", "ADMIN has full access. STAFF can sell, view customers, and update stock.", `<button class="btn" data-action="open-user">Add User</button>`)}
     <section class="panel">
       <div class="table-wrap">
         <table>
-          <thead><tr><th>Ten</th><th>Tai khoan</th><th>Vai tro</th><th></th></tr></thead>
+          <thead><tr><th>Name</th><th>Username</th><th>Role</th><th></th></tr></thead>
           <tbody>
             ${state.users
               .map(
@@ -516,7 +482,7 @@ function renderUsers() {
                     <td><strong>${user.name}</strong></td>
                     <td>${user.username}</td>
                     <td><span class="badge ${user.role === "ADMIN" ? "ok" : ""}">${user.role}</span></td>
-                    <td><button class="btn secondary" data-action="edit-user" data-id="${user.id}">Sua</button></td>
+                    <td><button class="btn secondary" data-action="edit-user" data-id="${user.id}">Edit</button></td>
                   </tr>
                 `
               )
@@ -537,6 +503,15 @@ function topbar(title, subtitle, actions = "") {
   `;
 }
 
+function brandLogo() {
+  return `
+    <div class="brand-mark">
+      <img class="brand-logo" src="assets/logo.svg" alt="Danny CRM POS logo" />
+      <span>Danny CRM POS</span>
+    </div>
+  `;
+}
+
 function renderModal() {
   if (modal.type === "product") return productModal();
   if (modal.type === "stock") return stockModal();
@@ -550,17 +525,17 @@ function productModal() {
   return `
     <div class="modal-backdrop">
       <form class="modal" data-form="product">
-        <div class="panel-head"><h2>${product.id ? "Sua san pham" : "Them san pham"}</h2><button class="btn ghost" data-action="close-modal" type="button">Dong</button></div>
+        <div class="panel-head"><h2>${product.id ? "Edit Product" : "Add Product"}</h2><button class="btn ghost" data-action="close-modal" type="button">Close</button></div>
         <div class="panel-body form-grid">
           ${hidden("id", product.id)}
           ${field("sku", "SKU", product.sku || "", "text", true)}
-          ${field("name", "Ten san pham", product.name || "", "text", true)}
-          ${field("category", "Danh muc", product.category || "", "text", true)}
-          ${field("price", "Gia ban", product.price || 0, "number", true)}
-          ${field("cost", "Gia von", product.cost || 0, "number", true)}
-          ${field("stock", "So luong ton", product.stock || 0, "number", true)}
-          ${field("minStock", "Muc canh bao", product.minStock || 0, "number", true)}
-          <button class="btn full" type="submit">Luu san pham</button>
+          ${field("name", "Product Name", product.name || "", "text", true)}
+          ${field("category", "Category", product.category || "", "text", true)}
+          ${field("price", "Sale Price", product.price || 0, "number", true)}
+          ${field("cost", "Cost", product.cost || 0, "number", true)}
+          ${field("stock", "Stock Quantity", product.stock || 0, "number", true)}
+          ${field("minStock", "Low Stock Alert", product.minStock || 0, "number", true)}
+          <button class="btn full" type="submit">Save Product</button>
         </div>
       </form>
     </div>
@@ -572,18 +547,18 @@ function stockModal() {
   return `
     <div class="modal-backdrop">
       <form class="modal" data-form="stock">
-        <div class="panel-head"><h2>Nhap/Xuat ton kho</h2><button class="btn ghost" data-action="close-modal" type="button">Dong</button></div>
+        <div class="panel-head"><h2>Adjust Stock</h2><button class="btn ghost" data-action="close-modal" type="button">Close</button></div>
         <div class="panel-body">
           ${hidden("id", product.id)}
-          <p><strong>${product.name}</strong> dang ton <strong>${product.stock}</strong> san pham.</p>
+          <p><strong>${product.name}</strong> currently has <strong>${product.stock}</strong> units in stock.</p>
           <div class="form-grid">
             <div class="field">
-              <label>Loai dieu chinh</label>
-              <select name="mode"><option value="in">Nhap hang</option><option value="out">Xuat/huy hang</option><option value="set">Dat lai so ton</option></select>
+              <label>Adjustment Type</label>
+              <select name="mode"><option value="in">Stock In</option><option value="out">Stock Out / Waste</option><option value="set">Set Stock</option></select>
             </div>
-            ${field("amount", "So luong", 1, "number", true)}
+            ${field("amount", "Quantity", 1, "number", true)}
           </div>
-          <button class="btn" type="submit">Cap nhat ton kho</button>
+          <button class="btn" type="submit">Update Stock</button>
         </div>
       </form>
     </div>
@@ -595,15 +570,15 @@ function customerModal() {
   return `
     <div class="modal-backdrop">
       <form class="modal" data-form="customer">
-        <div class="panel-head"><h2>${customer.id ? "Sua khach hang" : "Them khach hang"}</h2><button class="btn ghost" data-action="close-modal" type="button">Dong</button></div>
+        <div class="panel-head"><h2>${customer.id ? "Edit Customer" : "Add Customer"}</h2><button class="btn ghost" data-action="close-modal" type="button">Close</button></div>
         <div class="panel-body form-grid">
           ${hidden("id", customer.id)}
-          ${field("name", "Ten khach hang", customer.name || "", "text", true)}
-          ${field("phone", "Dien thoai", customer.phone || "")}
+          ${field("name", "Customer Name", customer.name || "", "text", true)}
+          ${field("phone", "Phone", customer.phone || "")}
           ${field("email", "Email", customer.email || "", "email")}
-          ${field("spent", "Da mua", customer.spent || 0, "number")}
-          <div class="field" style="grid-column:1/-1"><label>Ghi chu</label><textarea name="note">${customer.note || ""}</textarea></div>
-          <button class="btn full" type="submit">Luu khach hang</button>
+          ${field("spent", "Lifetime Spend", customer.spent || 0, "number")}
+          <div class="field" style="grid-column:1/-1"><label>Note</label><textarea name="note">${customer.note || ""}</textarea></div>
+          <button class="btn full" type="submit">Save Customer</button>
         </div>
       </form>
     </div>
@@ -615,17 +590,17 @@ function userModal() {
   return `
     <div class="modal-backdrop">
       <form class="modal" data-form="user">
-        <div class="panel-head"><h2>${user.id ? "Sua nhan su" : "Them nhan su"}</h2><button class="btn ghost" data-action="close-modal" type="button">Dong</button></div>
+        <div class="panel-head"><h2>${user.id ? "Edit User" : "Add User"}</h2><button class="btn ghost" data-action="close-modal" type="button">Close</button></div>
         <div class="panel-body form-grid">
           ${hidden("id", user.id)}
-          ${field("name", "Ho ten", user.name || "", "text", true)}
-          ${field("username", "Tai khoan", user.username || "", "text", true)}
-          ${field("password", "Mat khau", user.password || "", "text", true)}
+          ${field("name", "Full Name", user.name || "", "text", true)}
+          ${field("username", "Username", user.username || "", "text", true)}
+          ${field("password", "Password", user.password || "", "text", true)}
           <div class="field">
-            <label>Vai tro</label>
+            <label>Role</label>
             <select name="role"><option value="STAFF" ${user.role === "STAFF" ? "selected" : ""}>STAFF</option><option value="ADMIN" ${user.role === "ADMIN" ? "selected" : ""}>ADMIN</option></select>
           </div>
-          <button class="btn full" type="submit">Luu nhan su</button>
+          <button class="btn full" type="submit">Save User</button>
         </div>
       </form>
     </div>
@@ -714,14 +689,14 @@ function bindEvents() {
         activeView = "dashboard";
         render();
       } catch {
-        alert("Sai tai khoan, mat khau, hoac backend khong truy cap duoc.");
+        alert("Invalid username, invalid password, or the backend is unavailable.");
       }
       return;
     }
 
     const user = state.users.find((item) => item.username === data.username && item.password === data.password);
     if (!user) {
-      alert("Sai tai khoan hoac mat khau.");
+      alert("Invalid username or password.");
       return;
     }
     setSession(user);
@@ -788,7 +763,7 @@ function checkout() {
   for (const item of cart) {
     const product = state.products.find((entry) => entry.id === item.productId);
     if (!product || product.stock < item.qty) {
-      alert(`Khong du ton kho cho ${item.name}.`);
+      alert(`Not enough stock for ${item.name}.`);
       return;
     }
   }
