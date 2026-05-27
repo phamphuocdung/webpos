@@ -28,6 +28,20 @@ window.APP_CONFIG = {
 
 After that, the GitHub Pages frontend will sign in through the backend and sync data to the encrypted online DB. Changes entered on a computer will appear on a phone after the phone reloads the website.
 
+## Google Sign-In
+
+Create a Google OAuth Web Client ID in Google Cloud Console. Add these authorized JavaScript origins:
+
+- `https://phamphuocdung.github.io`
+- `https://webpos-m4qf.onrender.com`
+
+Then set the same client ID in two places:
+
+- Render environment variable: `GOOGLE_CLIENT_ID`
+- Frontend `config.js`: `GOOGLE_CLIENT_ID`
+
+The backend assigns `dung.phamphuoc308@gmail.com` as `ADMIN`. Other Google accounts are created as `STAFF`.
+
 To clear existing test data in a deployed backend, run this command on the backend host:
 
 ```powershell

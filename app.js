@@ -1,6 +1,7 @@
 const STORAGE_KEY = "danny-crm-pos-state-v2";
 const SESSION_KEY = "danny-crm-session";
 const API_URL = (window.APP_CONFIG?.API_URL || "").replace(/\/$/, "");
+const GOOGLE_CLIENT_ID = window.APP_CONFIG?.GOOGLE_CLIENT_ID || "";
 
 const initialState = {
   users: [
@@ -9,6 +10,8 @@ const initialState = {
   products: [],
   customers: [],
   sales: [],
+  activityLogs: [],
+  shifts: [],
 };
 
 let state = loadState();
@@ -26,10 +29,21 @@ function loadState() {
   const stored = localStorage.getItem(STORAGE_KEY);
   if (!stored) return structuredClone(initialState);
   try {
-    return JSON.parse(stored);
+    return normalizeState(JSON.parse(stored));
   } catch {
     return structuredClone(initialState);
   }
+}
+
+function normalizeState(nextState) {
+  return {
+    users: Array.isArray(nextState.users) ? nextState.users : [],
+    products: Array.isArray(nextState.products) ? nextState.products : [],
+    customers: Array.isArray(nextState.customers) ? nextState.customers : [],
+    sales: Array.isArray(nextState.sales) ? nextState.sales : [],
+    activityLogs: Array.isArray(nextState.activityLogs) ? nextState.activityLogs : [],
+    shifts: Array.isArray(nextState.shifts) ? nextState.shifts : [],
+  };
 }
 
 function saveState() {
@@ -52,8 +66,26 @@ function saveState() {
 }
 
 function setSession(user, token = session?.token) {
-  session = user ? { id: user.id, name: user.name, role: user.role, token } : null;
+  session = user
+    ? {
+        id: user.id,
+        name: user.name,
+        role: user.role,
+        email: user.email || "",
+        shiftId: user.shiftId || session?.shiftId || "",
+        authProvider: user.authProvider || user.provider || "password",
+        token,
+      }
+    : null;
   localStorage.setItem(SESSION_KEY, JSON.stringify(session));
+  render();
+}
+
+async function completeLogin(result) {
+  session = { ...result.user, token: result.token };
+  localStorage.setItem(SESSION_KEY, JSON.stringify(session));
+  await loadRemoteState();
+  activeView = "dashboard";
   render();
 }
 
@@ -79,7 +111,7 @@ async function apiRequest(path, options = {}) {
 
 async function loadRemoteState() {
   if (!API_URL || !session?.token) return;
-  state = await apiRequest("/api/state");
+  state = normalizeState(await apiRequest("/api/state"));
   localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
 }
 
@@ -127,6 +159,7 @@ function render() {
     ["inventory", "I", "Inventory"],
     ["customers", "C", "Customers"],
     ["reports", "R", "Reports"],
+    ...(isAdmin() ? [["activity", "A", "Activity"]] : []),
     ...(isAdmin() ? [["users", "U", "Users"]] : []),
   ];
 
@@ -184,6 +217,8 @@ function renderLogin() {
             <input id="password" name="password" type="password" autocomplete="current-password" value="admin123" required />
           </div>
           <button class="btn full" type="submit">Sign in</button>
+          <div id="googleSignIn" class="google-signin"></div>
+          ${GOOGLE_CLIENT_ID ? "" : `<div class="setup-note">Google Sign-In needs GOOGLE_CLIENT_ID in config.js.</div>`}
           <div class="login-hints">
             <span><strong>ADMIN</strong>: admin / admin123</span>
             <span>Create staff users from the Users page.</span>
@@ -200,6 +235,7 @@ function renderView() {
   if (activeView === "inventory") return renderInventory();
   if (activeView === "customers") return renderCustomers();
   if (activeView === "reports") return renderReports();
+  if (activeView === "activity") return renderActivity();
   if (activeView === "users") return renderUsers();
   return renderDashboard();
 }
@@ -494,6 +530,85 @@ function renderUsers() {
   `;
 }
 
+function renderActivity() {
+  if (!isAdmin()) return renderDashboard();
+  const today = new Date().toISOString().slice(0, 10);
+  const staffUsers = state.users.filter((user) => user.role === "STAFF");
+  const staffRows = staffUsers.map((user) => {
+    const salesToday = state.sales.filter((sale) => sale.userId === user.id && sale.createdAt.slice(0, 10) === today);
+    const revenue = salesToday.reduce((sum, sale) => sum + sale.total, 0);
+    const onlineMs = state.shifts
+      .filter((shift) => shift.userId === user.id && shift.startedAt.slice(0, 10) === today)
+      .reduce((sum, shift) => {
+        const end = shift.endedAt ? new Date(shift.endedAt) : new Date();
+        return sum + Math.max(0, end - new Date(shift.startedAt));
+      }, 0);
+    const currentShift = state.shifts.find((shift) => shift.userId === user.id && !shift.endedAt);
+    return { user, revenue, orders: salesToday.length, onlineMs, online: Boolean(currentShift) };
+  });
+
+  return `
+    ${topbar("Staff Activity", "Review staff sales, shift time, and recent activity logs.")}
+    <section class="panel">
+      <div class="panel-head"><h2>Today by Staff</h2><span class="badge">${today}</span></div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Staff</th><th>Status</th><th>Orders</th><th>Revenue</th><th>Online Time</th></tr></thead>
+          <tbody>
+            ${
+              staffRows.length
+                ? staffRows
+                    .map(
+                      (row) => `
+                        <tr>
+                          <td><strong>${row.user.name}</strong><br>${row.user.email || row.user.username || ""}</td>
+                          <td><span class="badge ${row.online ? "ok" : ""}">${row.online ? "Online" : "Offline"}</span></td>
+                          <td>${row.orders}</td>
+                          <td>${money.format(row.revenue)}</td>
+                          <td>${formatDuration(row.onlineMs)}</td>
+                        </tr>
+                      `
+                    )
+                    .join("")
+                : `<tr><td colspan="5" class="empty">No staff accounts yet.</td></tr>`
+            }
+          </tbody>
+        </table>
+      </div>
+    </section>
+    <section class="panel" style="margin-top:16px">
+      <div class="panel-head"><h2>Recent Logs</h2></div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Time</th><th>User</th><th>Role</th><th>Action</th><th>Details</th></tr></thead>
+          <tbody>
+            ${
+              state.activityLogs.length
+                ? state.activityLogs
+                    .slice()
+                    .reverse()
+                    .slice(0, 80)
+                    .map(
+                      (log) => `
+                        <tr>
+                          <td>${fmtDate(log.createdAt)}</td>
+                          <td>${log.userName || "-"}</td>
+                          <td>${log.role || "-"}</td>
+                          <td><span class="badge">${log.type}</span></td>
+                          <td>${log.details || "-"}</td>
+                        </tr>
+                      `
+                    )
+                    .join("")
+                : `<tr><td colspan="5" class="empty">No activity logs yet.</td></tr>`
+            }
+          </tbody>
+        </table>
+      </div>
+    </section>
+  `;
+}
+
 function topbar(title, subtitle, actions = "") {
   return `
     <div class="topbar">
@@ -501,6 +616,26 @@ function topbar(title, subtitle, actions = "") {
       <div class="toolbar">${actions}</div>
     </div>
   `;
+}
+
+function formatDuration(ms) {
+  const totalMinutes = Math.floor(ms / 60000);
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+  return `${hours}h ${minutes}m`;
+}
+
+function addActivity(type, details = "") {
+  state.activityLogs.push({
+    id: uid("log"),
+    type,
+    details,
+    createdAt: new Date().toISOString(),
+    userId: session?.id || "",
+    userName: session?.name || "",
+    role: session?.role || "",
+    email: session?.email || "",
+  });
 }
 
 function brandLogo() {
@@ -624,10 +759,13 @@ function bindEvents() {
   });
 
   document.querySelectorAll("[data-action]").forEach((button) => {
-    button.addEventListener("click", (event) => {
+    button.addEventListener("click", async (event) => {
       const action = button.dataset.action;
       const id = button.dataset.id;
-      if (action === "logout") setSession(null);
+      if (action === "logout") {
+        await logout();
+        return;
+      }
       if (action === "clear-cart") {
         cart = [];
         render();
@@ -683,11 +821,7 @@ function bindEvents() {
           body: JSON.stringify(data),
           auth: false,
         });
-        session = { ...result.user, token: result.token };
-        localStorage.setItem(SESSION_KEY, JSON.stringify(session));
-        await loadRemoteState();
-        activeView = "dashboard";
-        render();
+        await completeLogin(result);
       } catch {
         alert("Invalid username, invalid password, or the backend is unavailable.");
       }
@@ -721,6 +855,59 @@ function bindEvents() {
   document.querySelector('[data-form="stock"]')?.addEventListener("submit", saveStock);
   document.querySelector('[data-form="customer"]')?.addEventListener("submit", saveCustomer);
   document.querySelector('[data-form="user"]')?.addEventListener("submit", saveUser);
+  renderGoogleButton();
+}
+
+async function logout() {
+  if (session?.role === "STAFF" && !confirm("End shift and log out?")) return;
+
+  if (API_URL && session?.token) {
+    try {
+      await apiRequest("/api/logout", { method: "POST", body: "{}" });
+    } catch (error) {
+      console.error("Logout sync failed", error);
+    }
+  }
+
+  if (window.google?.accounts?.id) {
+    window.google.accounts.id.disableAutoSelect();
+  }
+
+  setSession(null);
+}
+
+function renderGoogleButton() {
+  const container = document.querySelector("#googleSignIn");
+  if (!container || !GOOGLE_CLIENT_ID || !API_URL) return;
+  if (!window.google?.accounts?.id) {
+    setTimeout(renderGoogleButton, 400);
+    return;
+  }
+  if (container.dataset.rendered === "true") return;
+  container.dataset.rendered = "true";
+
+  window.google.accounts.id.initialize({
+    client_id: GOOGLE_CLIENT_ID,
+    callback: async (response) => {
+      try {
+        const result = await apiRequest("/api/google-login", {
+          method: "POST",
+          body: JSON.stringify({ credential: response.credential }),
+          auth: false,
+        });
+        await completeLogin(result);
+      } catch (error) {
+        console.error("Google sign-in failed", error);
+        alert("Google sign-in failed. Check Google Client ID and backend settings.");
+      }
+    },
+  });
+
+  window.google.accounts.id.renderButton(container, {
+    theme: "outline",
+    size: "large",
+    width: Math.min(360, container.clientWidth || 360),
+  });
 }
 
 function addToCart(productId) {
@@ -752,7 +939,9 @@ function checkout() {
     id: uid("sale"),
     code: `HD-${1000 + state.sales.length + 1}`,
     createdAt: new Date().toISOString(),
+    userId: session.id,
     userName: session.name,
+    userEmail: session.email || "",
     customerId,
     subtotal,
     discount,
@@ -777,6 +966,7 @@ function checkout() {
   if (customer) customer.spent = Number(customer.spent || 0) + sale.total;
 
   state.sales.push(sale);
+  addActivity("SALE", `${sale.code} - ${money.format(sale.total)}`);
   cart = [];
   saveState();
   activeView = "reports";
@@ -800,6 +990,7 @@ function saveProduct(event) {
   const index = state.products.findIndex((item) => item.id === product.id);
   if (index >= 0) state.products[index] = product;
   else state.products.push(product);
+  addActivity(index >= 0 ? "PRODUCT_UPDATED" : "PRODUCT_CREATED", `${product.sku} - ${product.name}`);
   modal = null;
   saveState();
   render();
@@ -814,6 +1005,7 @@ function saveStock(event) {
   if (data.mode === "in") product.stock += amount;
   if (data.mode === "out") product.stock = Math.max(0, product.stock - amount);
   if (data.mode === "set") product.stock = amount;
+  addActivity("STOCK_ADJUSTED", `${product.sku} ${data.mode} ${amount}; stock ${product.stock}`);
   modal = null;
   saveState();
   render();
@@ -833,6 +1025,7 @@ function saveCustomer(event) {
   const index = state.customers.findIndex((item) => item.id === customer.id);
   if (index >= 0) state.customers[index] = customer;
   else state.customers.push(customer);
+  addActivity(index >= 0 ? "CUSTOMER_UPDATED" : "CUSTOMER_CREATED", customer.name);
   modal = null;
   saveState();
   render();
@@ -852,6 +1045,7 @@ function saveUser(event) {
   const index = state.users.findIndex((item) => item.id === user.id);
   if (index >= 0) state.users[index] = user;
   else state.users.push(user);
+  addActivity(index >= 0 ? "USER_UPDATED" : "USER_CREATED", `${user.username} (${user.role})`);
   modal = null;
   saveState();
   render();

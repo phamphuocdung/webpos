@@ -44,5 +44,7 @@ Deploy this `server` folder to a Node.js host such as Render, Railway, Fly.io, o
 - `SESSION_SECRET`
 - `CORS_ORIGIN=https://phamphuocdung.github.io`
 - `DB_PATH=./data/db.enc.json`
+- `GOOGLE_CLIENT_ID`
+- `ADMIN_EMAIL=dung.phamphuoc308@gmail.com`
 
 After backend deploy, update frontend `config.js` with the backend URL and push to GitHub Pages.
