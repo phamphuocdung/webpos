@@ -2,6 +2,15 @@
 
 Standalone web CRM/POS for sales, customer management, staff roles, statistics, and inventory control.
 
+## Added POS/CRM Workflows
+
+- Printable sales receipts from checkout and order history.
+- Full-sale refunds that return sold items to stock.
+- Customer purchase history inside each customer profile.
+- CRM follow-up tasks with due dates, assignees, notes, and status.
+- Sales CSV export for reporting and spreadsheet analysis.
+- Staff activity tracking, shift timing, and audit logs.
+
 ## Open
 
 Open `index.html` in a browser.

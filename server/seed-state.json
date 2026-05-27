@@ -5,6 +5,8 @@
   "products": [],
   "customers": [],
   "sales": [],
+  "returns": [],
+  "tasks": [],
   "activityLogs": [],
   "shifts": []
 }

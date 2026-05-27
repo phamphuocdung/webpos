@@ -10,6 +10,8 @@ const initialState = {
   products: [],
   customers: [],
   sales: [],
+  returns: [],
+  tasks: [],
   activityLogs: [],
   shifts: [],
 };
@@ -41,6 +43,8 @@ function normalizeState(nextState) {
     products: Array.isArray(nextState.products) ? nextState.products : [],
     customers: Array.isArray(nextState.customers) ? nextState.customers : [],
     sales: Array.isArray(nextState.sales) ? nextState.sales : [],
+    returns: Array.isArray(nextState.returns) ? nextState.returns : [],
+    tasks: Array.isArray(nextState.tasks) ? nextState.tasks : [],
     activityLogs: Array.isArray(nextState.activityLogs) ? nextState.activityLogs : [],
     shifts: Array.isArray(nextState.shifts) ? nextState.shifts : [],
   };
@@ -131,14 +135,18 @@ function fmtDate(value) {
 }
 
 function getStats() {
-  const revenue = state.sales.reduce((sum, sale) => sum + sale.total, 0);
+  const revenue = state.sales.reduce((sum, sale) => sum + netSaleTotal(sale), 0);
   const cost = state.sales.reduce(
-    (sum, sale) => sum + sale.items.reduce((lineSum, item) => lineSum + item.cost * item.qty, 0),
+    (sum, sale) => (sale.status === "REFUNDED" ? sum : sum + sale.items.reduce((lineSum, item) => lineSum + item.cost * item.qty, 0)),
     0
   );
   const inventoryValue = state.products.reduce((sum, product) => sum + product.cost * product.stock, 0);
   const lowStock = state.products.filter((product) => product.stock <= product.minStock).length;
   return { revenue, profit: revenue - cost, inventoryValue, lowStock, orders: state.sales.length };
+}
+
+function netSaleTotal(sale) {
+  return Math.max(0, Number(sale.total || 0) - Number(sale.refundTotal || 0));
 }
 
 function productStatus(product) {
@@ -158,6 +166,7 @@ function render() {
     ["pos", "$", "POS"],
     ["inventory", "I", "Inventory"],
     ["customers", "C", "Customers"],
+    ["tasks", "T", "Tasks"],
     ["reports", "R", "Reports"],
     ...(isAdmin() ? [["activity", "A", "Activity"]] : []),
     ...(isAdmin() ? [["users", "U", "Users"]] : []),
@@ -234,6 +243,7 @@ function renderView() {
   if (activeView === "pos") return renderPos();
   if (activeView === "inventory") return renderInventory();
   if (activeView === "customers") return renderCustomers();
+  if (activeView === "tasks") return renderTasks();
   if (activeView === "reports") return renderReports();
   if (activeView === "activity") return renderActivity();
   if (activeView === "users") return renderUsers();
@@ -263,7 +273,7 @@ function renderDashboard() {
                       <td><strong>${sale.code}</strong></td>
                       <td>${fmtDate(sale.createdAt)}</td>
                       <td>${sale.userName}</td>
-                      <td>${money.format(sale.total)}</td>
+                      <td>${money.format(netSaleTotal(sale))}</td>
                     </tr>
                   `
                 )
@@ -438,7 +448,10 @@ function renderCustomers() {
                     <td>${customer.email || "-"}</td>
                     <td>${money.format(customer.spent || 0)}</td>
                     <td>${customer.note || "-"}</td>
-                    <td><button class="btn secondary" data-action="edit-customer" data-id="${customer.id}">Edit</button></td>
+                    <td class="toolbar">
+                      <button class="btn secondary" data-action="customer-history" data-id="${customer.id}">History</button>
+                      <button class="btn secondary" data-action="edit-customer" data-id="${customer.id}">Edit</button>
+                    </td>
                   </tr>
                 `
               )
@@ -450,9 +463,52 @@ function renderCustomers() {
   `;
 }
 
+function renderTasks() {
+  const visibleTasks = state.tasks
+    .filter((task) => isAdmin() || task.assignedTo === session.id || !task.assignedTo)
+    .sort((a, b) => (a.status === b.status ? String(a.dueDate || "").localeCompare(String(b.dueDate || "")) : a.status.localeCompare(b.status)));
+
+  return `
+    ${topbar("CRM Tasks", "Track follow-ups, reminders, and customer service action items.", `<button class="btn" data-action="open-task">Add Task</button>`)}
+    <section class="panel">
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Task</th><th>Customer</th><th>Assigned To</th><th>Due</th><th>Status</th><th></th></tr></thead>
+          <tbody>
+            ${
+              visibleTasks.length
+                ? visibleTasks
+                    .map((task) => {
+                      const customer = state.customers.find((item) => item.id === task.customerId);
+                      const assignee = state.users.find((item) => item.id === task.assignedTo);
+                      return `
+                        <tr>
+                          <td><strong>${task.title}</strong><br>${task.note || ""}</td>
+                          <td>${customer?.name || "-"}</td>
+                          <td>${assignee?.name || "Unassigned"}</td>
+                          <td>${task.dueDate || "-"}</td>
+                          <td><span class="badge ${task.status === "DONE" ? "ok" : task.status === "OVERDUE" ? "danger" : ""}">${task.status}</span></td>
+                          <td class="toolbar">
+                            <button class="btn secondary" data-action="toggle-task" data-id="${task.id}">${task.status === "DONE" ? "Reopen" : "Done"}</button>
+                            <button class="btn secondary" data-action="edit-task" data-id="${task.id}">Edit</button>
+                          </td>
+                        </tr>
+                      `;
+                    })
+                    .join("")
+                : `<tr><td colspan="6" class="empty">No tasks yet.</td></tr>`
+            }
+          </tbody>
+        </table>
+      </div>
+    </section>
+  `;
+}
+
 function renderReports() {
   const byProduct = {};
   state.sales.forEach((sale) => {
+    if (sale.status === "REFUNDED") return;
     sale.items.forEach((item) => {
       byProduct[item.name] = (byProduct[item.name] || 0) + item.qty * item.price;
     });
@@ -460,7 +516,7 @@ function renderReports() {
   const rows = Object.entries(byProduct).sort((a, b) => b[1] - a[1]);
   const max = Math.max(...rows.map((row) => row[1]), 1);
   return `
-    ${topbar("Reports", "Track revenue by product and review order history.")}
+    ${topbar("Reports", "Track revenue by product and review order history.", `<button class="btn secondary" data-action="export-sales">Export CSV</button>`)}
     ${statGrid(getStats())}
     <div class="grid-2">
       <section class="panel">
@@ -487,13 +543,25 @@ function renderReports() {
         <div class="panel-head"><h2>Order History</h2></div>
         <div class="table-wrap">
           <table>
-            <thead><tr><th>Code</th><th>Time</th><th>Total</th></tr></thead>
+            <thead><tr><th>Code</th><th>Time</th><th>Total</th><th></th></tr></thead>
             <tbody>
               ${state.sales.length ? state.sales
                 .slice()
                 .reverse()
-                .map((sale) => `<tr><td>${sale.code}</td><td>${fmtDate(sale.createdAt)}</td><td>${money.format(sale.total)}</td></tr>`)
-                .join("") : `<tr><td colspan="3" class="empty">No orders yet.</td></tr>`}
+                .map(
+                  (sale) => `
+                    <tr>
+                      <td>${sale.code}<br><span class="badge ${sale.status === "REFUNDED" ? "danger" : "ok"}">${sale.status || "PAID"}</span></td>
+                      <td>${fmtDate(sale.createdAt)}</td>
+                      <td>${money.format(netSaleTotal(sale))}</td>
+                      <td class="toolbar">
+                        <button class="btn secondary" data-action="receipt" data-id="${sale.id}">Receipt</button>
+                        <button class="btn secondary" data-action="refund-sale" data-id="${sale.id}" ${sale.status === "REFUNDED" ? "disabled" : ""}>Refund</button>
+                      </td>
+                    </tr>
+                  `
+                )
+                .join("") : `<tr><td colspan="4" class="empty">No orders yet.</td></tr>`}
             </tbody>
           </table>
         </div>
@@ -536,7 +604,7 @@ function renderActivity() {
   const staffUsers = state.users.filter((user) => user.role === "STAFF");
   const staffRows = staffUsers.map((user) => {
     const salesToday = state.sales.filter((sale) => sale.userId === user.id && sale.createdAt.slice(0, 10) === today);
-    const revenue = salesToday.reduce((sum, sale) => sum + sale.total, 0);
+    const revenue = salesToday.reduce((sum, sale) => sum + netSaleTotal(sale), 0);
     const onlineMs = state.shifts
       .filter((shift) => shift.userId === user.id && shift.startedAt.slice(0, 10) === today)
       .reduce((sum, shift) => {
@@ -651,6 +719,9 @@ function renderModal() {
   if (modal.type === "product") return productModal();
   if (modal.type === "stock") return stockModal();
   if (modal.type === "customer") return customerModal();
+  if (modal.type === "customerHistory") return customerHistoryModal();
+  if (modal.type === "task") return taskModal();
+  if (modal.type === "receipt") return receiptModal();
   if (modal.type === "user") return userModal();
   return "";
 }
@@ -720,6 +791,103 @@ function customerModal() {
   `;
 }
 
+function customerHistoryModal() {
+  const customer = state.customers.find((item) => item.id === modal.id);
+  const sales = state.sales.filter((sale) => sale.customerId === modal.id);
+  return `
+    <div class="modal-backdrop">
+      <div class="modal">
+        <div class="panel-head"><h2>${customer?.name || "Customer"} History</h2><button class="btn ghost" data-action="close-modal" type="button">Close</button></div>
+        <div class="panel-body">
+          <div class="stat-grid">
+            <div class="stat"><span>Orders</span><strong>${sales.length}</strong></div>
+            <div class="stat"><span>Total Spend</span><strong>${money.format(sales.reduce((sum, sale) => sum + netSaleTotal(sale), 0))}</strong></div>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Code</th><th>Date</th><th>Staff</th><th>Total</th></tr></thead>
+              <tbody>
+                ${
+                  sales.length
+                    ? sales
+                        .slice()
+                        .reverse()
+                        .map((sale) => `<tr><td>${sale.code}</td><td>${fmtDate(sale.createdAt)}</td><td>${sale.userName}</td><td>${money.format(netSaleTotal(sale))}</td></tr>`)
+                        .join("")
+                    : `<tr><td colspan="4" class="empty">No purchases yet.</td></tr>`
+                }
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function taskModal() {
+  const task = modal.id ? state.tasks.find((item) => item.id === modal.id) : {};
+  return `
+    <div class="modal-backdrop">
+      <form class="modal" data-form="task">
+        <div class="panel-head"><h2>${task.id ? "Edit Task" : "Add Task"}</h2><button class="btn ghost" data-action="close-modal" type="button">Close</button></div>
+        <div class="panel-body form-grid">
+          ${hidden("id", task.id)}
+          ${field("title", "Task", task.title || "", "text", true)}
+          <div class="field">
+            <label>Customer</label>
+            <select name="customerId"><option value="">No customer</option>${state.customers.map((customer) => `<option value="${customer.id}" ${task.customerId === customer.id ? "selected" : ""}>${customer.name}</option>`).join("")}</select>
+          </div>
+          <div class="field">
+            <label>Assigned To</label>
+            <select name="assignedTo"><option value="">Unassigned</option>${state.users.map((user) => `<option value="${user.id}" ${task.assignedTo === user.id ? "selected" : ""}>${user.name}</option>`).join("")}</select>
+          </div>
+          ${field("dueDate", "Due Date", task.dueDate || "", "date")}
+          <div class="field">
+            <label>Status</label>
+            <select name="status"><option value="OPEN" ${task.status === "OPEN" ? "selected" : ""}>OPEN</option><option value="DONE" ${task.status === "DONE" ? "selected" : ""}>DONE</option></select>
+          </div>
+          <div class="field" style="grid-column:1/-1"><label>Note</label><textarea name="note">${task.note || ""}</textarea></div>
+          <button class="btn full" type="submit">Save Task</button>
+        </div>
+      </form>
+    </div>
+  `;
+}
+
+function receiptModal() {
+  const sale = state.sales.find((item) => item.id === modal.id);
+  if (!sale) return "";
+  const customer = state.customers.find((item) => item.id === sale.customerId);
+  return `
+    <div class="modal-backdrop">
+      <div class="modal">
+        <div class="panel-head">
+          <h2>Receipt ${sale.code}</h2>
+          <div class="toolbar">
+            <button class="btn secondary" data-action="print-receipt" type="button">Print</button>
+            <button class="btn ghost" data-action="close-modal" type="button">Close</button>
+          </div>
+        </div>
+        <div class="panel-body receipt" id="receiptPrint">
+          ${brandLogo()}
+          <p><strong>Receipt:</strong> ${sale.code}<br><strong>Date:</strong> ${fmtDate(sale.createdAt)}<br><strong>Staff:</strong> ${sale.userName}<br><strong>Customer:</strong> ${customer?.name || "Walk-in customer"}</p>
+          <table>
+            <thead><tr><th>Item</th><th>Qty</th><th>Price</th><th>Total</th></tr></thead>
+            <tbody>${sale.items.map((item) => `<tr><td>${item.name}</td><td>${item.qty}</td><td>${money.format(item.price)}</td><td>${money.format(item.price * item.qty)}</td></tr>`).join("")}</tbody>
+          </table>
+          <div class="totals">
+            <div class="total-row"><span>Subtotal</span><strong>${money.format(sale.subtotal)}</strong></div>
+            <div class="total-row"><span>Discount</span><strong>${money.format(sale.discount)}</strong></div>
+            <div class="total-row grand"><span>Total</span><strong>${money.format(netSaleTotal(sale))}</strong></div>
+            ${sale.status === "REFUNDED" ? `<div class="badge danger">Refunded ${money.format(sale.refundTotal || sale.total)}</div>` : ""}
+          </div>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
 function userModal() {
   const user = modal.id ? state.users.find((item) => item.id === modal.id) : {};
   return `
@@ -774,6 +942,13 @@ function bindEvents() {
       if (action === "inc-cart") changeCartQty(id, 1);
       if (action === "dec-cart") changeCartQty(id, -1);
       if (action === "checkout") checkout();
+      if (action === "receipt") {
+        modal = { type: "receipt", id };
+        render();
+      }
+      if (action === "print-receipt") printReceipt();
+      if (action === "refund-sale") refundSale(id);
+      if (action === "export-sales") exportSalesCsv();
       if (action === "open-product") {
         modal = { type: "product" };
         render();
@@ -790,10 +965,23 @@ function bindEvents() {
         modal = { type: "customer" };
         render();
       }
+      if (action === "customer-history") {
+        modal = { type: "customerHistory", id };
+        render();
+      }
       if (action === "edit-customer") {
         modal = { type: "customer", id };
         render();
       }
+      if (action === "open-task") {
+        modal = { type: "task" };
+        render();
+      }
+      if (action === "edit-task") {
+        modal = { type: "task", id };
+        render();
+      }
+      if (action === "toggle-task") toggleTask(id);
       if (action === "open-user") {
         modal = { type: "user" };
         render();
@@ -854,6 +1042,7 @@ function bindEvents() {
   document.querySelector('[data-form="product"]')?.addEventListener("submit", saveProduct);
   document.querySelector('[data-form="stock"]')?.addEventListener("submit", saveStock);
   document.querySelector('[data-form="customer"]')?.addEventListener("submit", saveCustomer);
+  document.querySelector('[data-form="task"]')?.addEventListener("submit", saveTask);
   document.querySelector('[data-form="user"]')?.addEventListener("submit", saveUser);
   renderGoogleButton();
 }
@@ -946,6 +1135,8 @@ function checkout() {
     subtotal,
     discount,
     total: Math.max(0, subtotal - discount),
+    refundTotal: 0,
+    status: "PAID",
     items: structuredClone(cart),
   };
 
@@ -969,7 +1160,40 @@ function checkout() {
   addActivity("SALE", `${sale.code} - ${money.format(sale.total)}`);
   cart = [];
   saveState();
+  modal = { type: "receipt", id: sale.id };
   activeView = "reports";
+  render();
+}
+
+function refundSale(saleId) {
+  const sale = state.sales.find((item) => item.id === saleId);
+  if (!sale || sale.status === "REFUNDED") return;
+  if (!confirm(`Refund ${sale.code} and return all items to stock?`)) return;
+
+  sale.status = "REFUNDED";
+  sale.refundedAt = new Date().toISOString();
+  sale.refundedBy = session.name;
+  sale.refundTotal = sale.total;
+  sale.items.forEach((item) => {
+    const product = state.products.find((entry) => entry.id === item.productId);
+    if (product) product.stock += item.qty;
+  });
+
+  const customer = state.customers.find((entry) => entry.id === sale.customerId);
+  if (customer) customer.spent = Math.max(0, Number(customer.spent || 0) - sale.total);
+
+  state.returns.push({
+    id: uid("return"),
+    saleId: sale.id,
+    code: `RT-${1000 + state.returns.length + 1}`,
+    createdAt: sale.refundedAt,
+    userId: session.id,
+    userName: session.name,
+    total: sale.total,
+    items: structuredClone(sale.items),
+  });
+  addActivity("REFUND", `${sale.code} - ${money.format(sale.total)}`);
+  saveState();
   render();
 }
 
@@ -1031,6 +1255,39 @@ function saveCustomer(event) {
   render();
 }
 
+function saveTask(event) {
+  event.preventDefault();
+  const data = Object.fromEntries(new FormData(event.currentTarget));
+  const task = {
+    id: data.id || uid("task"),
+    title: data.title.trim(),
+    customerId: data.customerId,
+    assignedTo: data.assignedTo,
+    dueDate: data.dueDate,
+    status: data.status || "OPEN",
+    note: data.note.trim(),
+    createdAt: data.id ? state.tasks.find((item) => item.id === data.id)?.createdAt || new Date().toISOString() : new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  };
+  const index = state.tasks.findIndex((item) => item.id === task.id);
+  if (index >= 0) state.tasks[index] = task;
+  else state.tasks.push(task);
+  addActivity(index >= 0 ? "TASK_UPDATED" : "TASK_CREATED", task.title);
+  modal = null;
+  saveState();
+  render();
+}
+
+function toggleTask(taskId) {
+  const task = state.tasks.find((item) => item.id === taskId);
+  if (!task) return;
+  task.status = task.status === "DONE" ? "OPEN" : "DONE";
+  task.updatedAt = new Date().toISOString();
+  addActivity("TASK_STATUS", `${task.title} -> ${task.status}`);
+  saveState();
+  render();
+}
+
 function saveUser(event) {
   event.preventDefault();
   if (!isAdmin()) return;
@@ -1049,6 +1306,53 @@ function saveUser(event) {
   modal = null;
   saveState();
   render();
+}
+
+function printReceipt() {
+  const receipt = document.querySelector("#receiptPrint");
+  if (!receipt) return;
+  const popup = window.open("", "_blank", "width=420,height=640");
+  popup.document.write(`
+    <html>
+      <head>
+        <title>Receipt</title>
+        <link rel="stylesheet" href="styles.css" />
+        <style>body{background:#fff;padding:20px}.receipt{box-shadow:none;border:0}.brand-logo{width:36px;height:36px}</style>
+      </head>
+      <body>${receipt.outerHTML}</body>
+    </html>
+  `);
+  popup.document.close();
+  popup.focus();
+  popup.print();
+}
+
+function exportSalesCsv() {
+  const rows = [
+    ["code", "createdAt", "staff", "customer", "status", "subtotal", "discount", "refundTotal", "netTotal"],
+    ...state.sales.map((sale) => {
+      const customer = state.customers.find((item) => item.id === sale.customerId);
+      return [
+        sale.code,
+        sale.createdAt,
+        sale.userName,
+        customer?.name || "Walk-in customer",
+        sale.status || "PAID",
+        sale.subtotal,
+        sale.discount,
+        sale.refundTotal || 0,
+        netSaleTotal(sale),
+      ];
+    }),
+  ];
+  const csv = rows.map((row) => row.map((cell) => `"${String(cell ?? "").replaceAll('"', '""')}"`).join(",")).join("\n");
+  const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = `sales-${new Date().toISOString().slice(0, 10)}.csv`;
+  link.click();
+  URL.revokeObjectURL(url);
 }
 
 async function boot() {

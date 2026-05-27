@@ -142,6 +142,8 @@ function normalizeState(state) {
     products: Array.isArray(state.products) ? state.products : [],
     customers: Array.isArray(state.customers) ? state.customers : [],
     sales: Array.isArray(state.sales) ? state.sales : [],
+    returns: Array.isArray(state.returns) ? state.returns : [],
+    tasks: Array.isArray(state.tasks) ? state.tasks : [],
     activityLogs: Array.isArray(state.activityLogs) ? state.activityLogs : [],
     shifts: Array.isArray(state.shifts) ? state.shifts : [],
   };
@@ -229,7 +231,7 @@ function base64Url(value) {
 }
 
 function validateState(state) {
-  const requiredArrays = ["users", "products", "customers", "sales", "activityLogs", "shifts"];
+  const requiredArrays = ["users", "products", "customers", "sales", "returns", "tasks", "activityLogs", "shifts"];
   for (const key of requiredArrays) {
     if (!Array.isArray(state[key])) throwHttp(400, "INVALID_STATE");
   }

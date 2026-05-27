@@ -576,6 +576,19 @@ tr:last-child td {
   text-align: center;
 }
 
+.receipt {
+  color: #111827;
+}
+
+.receipt .brand-mark {
+  color: #111827;
+  margin-bottom: 14px;
+}
+
+.receipt table {
+  margin-top: 14px;
+}
+
 .chart {
   display: grid;
   gap: 12px;
